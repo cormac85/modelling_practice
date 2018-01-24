@@ -1,0 +1,50 @@
+---
+title: "Modelling Practise"
+author: "Cormac Nolan"
+date: "24 January 2018"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+## Setup {.tabset}
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message=FALSE, warning=TRUE, error=TRUE)
+
+set.seed(413)
+```
+
+
+```{r packages_and_data, warning=FALSE}
+library(tidyverse)
+library(caret)
+library(knitr)
+titanic_raw <- read_csv("./data/train.csv")
+
+```
+
+### Explore
+Check for NA's
+```{r explore}
+titanic_raw %>% head() %>% kable(caption = "Titanic Survivor Kaggle Dataset")
+
+# Next two do the same thing, check number of NA's
+colSums(is.na(titanic_raw)) 
+titanic_raw %>% summarise_all(function(x) sum(is.na(x))) %>% 
+  knitr::kable(caption = "NA's for Each Variable")
+
+titanic_raw %>% tally() %>%  
+  knitr::kable(caption = "Number of Observations")
+```
+
+### Clean
+```{r clean}
+titanic <- 
+  titanic_raw %>% select(-Cabin, -PassengerId, -Ticket) %>% 
+  mutate(Age = ifelse(is.na(Age), mean(Age, na.rm=TRUE), Age)) %>% View()
+
+# titanic_raw %>% select(-Cabin, -PassengerId, -Ticket) %>% 
+#  mutate(Age = replace(Age, is.na(Age), mean(Age, na.rm = TRUE))) %>% View()
+```
+
