@@ -20,6 +20,7 @@ set.seed(413)
 library(tidyverse)
 library(caret)
 library(knitr)
+library(ROCR)
 titanic_raw <- read_csv("./data/train.csv")
 
 ```
@@ -40,11 +41,96 @@ titanic_raw %>% tally() %>%
 
 ### Clean
 ```{r clean}
-titanic <- 
+titanic_clean <- 
   titanic_raw %>% select(-Cabin, -PassengerId, -Ticket) %>% 
-  mutate(Age = ifelse(is.na(Age), mean(Age, na.rm=TRUE), Age)) %>% View()
+  mutate(Age = ifelse(is.na(Age), mean(Age, na.rm=TRUE), Age)) %>% 
+  filter(!is.na(Embarked)) %>% 
+  mutate(Survived = as.factor(Survived),
+         Pclass = as.factor(Pclass),
+         Sex= as.factor(Sex),
+         SibSp = as.factor(SibSp),
+         Parch = as.factor(Parch),
+         Embarked = as.factor(Embarked))
+
+# make the levels of factors valid
+feature.names=names(titanic_clean)
+
+for (f in feature.names) {
+  if (class(titanic_clean[[f]])=="factor") {
+    levels <- unique(c(titanic_clean[[f]]))
+    titanic_clean[[f]] <- factor(titanic_clean[[f]],
+                   labels=make.names(levels))
+  }
+}
 
 # titanic_raw %>% select(-Cabin, -PassengerId, -Ticket) %>% 
 #  mutate(Age = replace(Age, is.na(Age), mean(Age, na.rm = TRUE))) %>% View()
+
+titanic_train_index <- titanic_clean$Survived %>%
+  createDataPartition(p=0.75, list = FALSE, times=1)
+
+titanic_train <- titanic_clean[titanic_train_index, ]
+titanic_test <- titanic_clean[-titanic_train_index, ]
 ```
 
+### Model and Assessment
+Let's fit the model to the relevant variables. We use binomial since there are 2 possible outcomes.
+```{r}
+train_control<- trainControl(method="cv", number=5, savePredictions = TRUE, 
+                             classProbs = TRUE)
+
+model_cv <- 
+  train(Survived ~ Pclass + Sex + Age + SibSp + Parch + Fare + Embarked,
+        data=titanic_train, trControl=train_control, method="glm",
+        family="binomial", metric = "Kappa")
+
+model <- 
+  glm(Survived ~ Pclass + Sex + Age + SibSp + Parch + Fare + Embarked,
+      family=binomial(link='logit'),data=titanic_train)
+
+summary(model)
+summary(model_cv)
+anova(model, test = "Chisq")
+anova(model_cv$finalModel, test = "Chisq")
+
+```
+
+We use summary and ANOVA analysis to assess the usefulness of each variable. In this case we have 5 variables that appear significant: *Pclass, Sexm, Age, SibSp and Embarked*. But using ANOVA we see that only 3 of them really contribute significantly to the result: *Pclass, Sex and Age*. The cross validated model is largely similar.
+
+Next we look at the confusion matrix and other metrics of performance against the test set which we split earlier. Note that the positive class is defined here as *Survived = X2* (did not survive)
+```{r confusion_matrix}
+fitted_results <- 
+  data.frame(probability = predict(model,
+                                   newdata=titanic_test %>% select(-Name),
+                                   type='response'),
+             probability_cv = predict(model_cv,
+                                      newdata=titanic_test %>%
+                                        select(-Name),
+                                      type='prob')[[1]],
+             class_cv = predict(model_cv, 
+                                newdata=titanic_test %>% select(-Name),
+                                type="raw"))
+
+fitted_results$class <- ifelse(fitted_results$probability > 0.5,'X2','X1')
+confusionMatrix(fitted_results$class, titanic_test$Survived)
+confusionMatrix(fitted_results$class_cv, titanic_test$Survived)
+```
+
+
+Reasonably good accuracy can be seen that is better than the no information rate, with maybe a weakness on prediciting the negative class (those who did survive) displayed by the lower specificity. Interestingly both the cross-validated version converged on the same solution as the the one without CV. Suggests that the model is probably performing as well as it can with this dataset and setup.
+
+### ROC Analysis
+Considering a fairly balanced response class, a ROC analysis is valid. 
+```{r ROC}
+table(titanic_raw$Survived)
+
+ROC_predictions <- prediction(fitted_results$probability,
+                               titanic_test$Survived)
+ROC_performance <- performance(ROC_predictions, measure = "tpr",
+                               x.measure="fpr")
+
+plot(ROC_performance)
+
+auc <- performance(ROC_predictions, measure = "auc")
+auc@y.values
+```

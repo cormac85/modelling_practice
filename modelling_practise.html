@@ -129,9 +129,10 @@ $(document).ready(function () {
 <pre class="r"><code>library(tidyverse)
 library(caret)
 library(knitr)
+library(ROCR)
 titanic_raw &lt;- read_csv(&quot;./data/train.csv&quot;)</code></pre>
-<div id="explore-and-clean" class="section level3">
-<h3>Explore and Clean</h3>
+<div id="explore" class="section level3">
+<h3>Explore</h3>
 <p>Check for NA’s</p>
 <pre class="r"><code>titanic_raw %&gt;% head() %&gt;% kable(caption = &quot;Titanic Survivor Kaggle Dataset&quot;)</code></pre>
 <table>
@@ -246,7 +247,7 @@ colSums(is.na(titanic_raw)) </code></pre>
 ##       SibSp       Parch      Ticket        Fare       Cabin    Embarked 
 ##           0           0           0           0         687           2</code></pre>
 <pre class="r"><code>titanic_raw %&gt;% summarise_all(function(x) sum(is.na(x))) %&gt;% 
-  knitr::kable( caption = &quot;NA's for Each Variable&quot;)</code></pre>
+  knitr::kable(caption = &quot;NA's for Each Variable&quot;)</code></pre>
 <table>
 <caption>NA’s for Each Variable</caption>
 <thead>
@@ -297,6 +298,285 @@ colSums(is.na(titanic_raw)) </code></pre>
 </tr>
 </tbody>
 </table>
+</div>
+<div id="clean" class="section level3">
+<h3>Clean</h3>
+<pre class="r"><code>titanic_clean &lt;- 
+  titanic_raw %&gt;% select(-Cabin, -PassengerId, -Ticket) %&gt;% 
+  mutate(Age = ifelse(is.na(Age), mean(Age, na.rm=TRUE), Age)) %&gt;% 
+  filter(!is.na(Embarked)) %&gt;% 
+  mutate(Survived = as.factor(Survived),
+         Pclass = as.factor(Pclass),
+         Sex= as.factor(Sex),
+         SibSp = as.factor(SibSp),
+         Parch = as.factor(Parch),
+         Embarked = as.factor(Embarked))
+
+# make the levels of factors valid
+feature.names=names(titanic_clean)
+
+for (f in feature.names) {
+  if (class(titanic_clean[[f]])==&quot;factor&quot;) {
+    levels &lt;- unique(c(titanic_clean[[f]]))
+    titanic_clean[[f]] &lt;- factor(titanic_clean[[f]],
+                   labels=make.names(levels))
+  }
+}
+
+# titanic_raw %&gt;% select(-Cabin, -PassengerId, -Ticket) %&gt;% 
+#  mutate(Age = replace(Age, is.na(Age), mean(Age, na.rm = TRUE))) %&gt;% View()
+
+titanic_train_index &lt;- titanic_clean$Survived %&gt;%
+  createDataPartition(p=0.75, list = FALSE, times=1)
+
+titanic_train &lt;- titanic_clean[titanic_train_index, ]
+titanic_test &lt;- titanic_clean[-titanic_train_index, ]</code></pre>
+</div>
+<div id="model-and-assessment" class="section level3">
+<h3>Model and Assessment</h3>
+<p>Let’s fit the model to the relevant variables. We use binomial since there are 2 possible outcomes.</p>
+<pre class="r"><code>train_control&lt;- trainControl(method=&quot;cv&quot;, number=5, savePredictions = TRUE, 
+                             classProbs = TRUE)
+
+model_cv &lt;- 
+  train(Survived ~ Pclass + Sex + Age + SibSp + Parch + Fare + Embarked,
+        data=titanic_train, trControl=train_control, method=&quot;glm&quot;,
+        family=&quot;binomial&quot;, metric = &quot;Kappa&quot;)</code></pre>
+<pre><code>## Warning in predict.lm(object, newdata, se.fit, scale = 1, type =
+## ifelse(type == : prediction from a rank-deficient fit may be misleading
+
+## Warning in predict.lm(object, newdata, se.fit, scale = 1, type =
+## ifelse(type == : prediction from a rank-deficient fit may be misleading</code></pre>
+<pre class="r"><code>model &lt;- 
+  glm(Survived ~ Pclass + Sex + Age + SibSp + Parch + Fare + Embarked,
+      family=binomial(link='logit'),data=titanic_train)
+
+summary(model)</code></pre>
+<pre><code>## 
+## Call:
+## glm(formula = Survived ~ Pclass + Sex + Age + SibSp + Parch + 
+##     Fare + Embarked, family = binomial(link = &quot;logit&quot;), data = titanic_train)
+## 
+## Deviance Residuals: 
+##     Min       1Q   Median       3Q      Max  
+## -2.7484  -0.6023  -0.4294   0.5758   2.4177  
+## 
+## Coefficients:
+##               Estimate Std. Error z value Pr(&gt;|z|)    
+## (Intercept)  2.992e+00  5.712e-01   5.239 1.61e-07 ***
+## PclassX1    -8.141e-01  3.595e-01  -2.265  0.02353 *  
+## PclassX2    -1.705e+00  3.535e-01  -4.823 1.41e-06 ***
+## SexX1       -2.656e+00  2.364e-01 -11.232  &lt; 2e-16 ***
+## Age         -2.984e-02  9.559e-03  -3.121  0.00180 ** 
+## SibSpX1      1.736e-01  2.557e-01   0.679  0.49722    
+## SibSpX4     -2.172e-01  5.982e-01  -0.363  0.71651    
+## SibSpX5     -2.548e+00  8.563e-01  -2.976  0.00292 ** 
+## SibSpX3     -1.550e+00  9.098e-01  -1.704  0.08836 .  
+## SibSpX6     -1.517e+01  1.382e+03  -0.011  0.99124    
+## SibSpX7     -1.615e+01  7.568e+02  -0.021  0.98297    
+## ParchX2      6.854e-01  3.374e-01   2.031  0.04221 *  
+## ParchX3      1.251e-01  4.084e-01   0.306  0.75938    
+## ParchX6      8.154e-01  1.481e+00   0.551  0.58190    
+## ParchX4     -1.601e+01  1.213e+03  -0.013  0.98947    
+## ParchX5     -1.613e+01  1.199e+03  -0.013  0.98927    
+## ParchX7     -1.683e+01  2.400e+03  -0.007  0.99441    
+## Fare         4.215e-03  2.961e-03   1.423  0.15465    
+## EmbarkedX1   3.141e-01  4.344e-01   0.723  0.46969    
+## EmbarkedX2  -1.166e-01  2.793e-01  -0.417  0.67632    
+## ---
+## Signif. codes:  0 '***' 0.001 '**' 0.01 '*' 0.05 '.' 0.1 ' ' 1
+## 
+## (Dispersion parameter for binomial family taken to be 1)
+## 
+##     Null deviance: 887.35  on 666  degrees of freedom
+## Residual deviance: 567.76  on 647  degrees of freedom
+## AIC: 607.76
+## 
+## Number of Fisher Scoring iterations: 15</code></pre>
+<pre class="r"><code>summary(model_cv)</code></pre>
+<pre><code>## 
+## Call:
+## NULL
+## 
+## Deviance Residuals: 
+##     Min       1Q   Median       3Q      Max  
+## -2.7484  -0.6023  -0.4294   0.5758   2.4177  
+## 
+## Coefficients:
+##               Estimate Std. Error z value Pr(&gt;|z|)    
+## (Intercept)  2.992e+00  5.712e-01   5.239 1.61e-07 ***
+## PclassX1    -8.141e-01  3.595e-01  -2.265  0.02353 *  
+## PclassX2    -1.705e+00  3.535e-01  -4.823 1.41e-06 ***
+## SexX1       -2.656e+00  2.364e-01 -11.232  &lt; 2e-16 ***
+## Age         -2.984e-02  9.559e-03  -3.121  0.00180 ** 
+## SibSpX1      1.736e-01  2.557e-01   0.679  0.49722    
+## SibSpX4     -2.172e-01  5.982e-01  -0.363  0.71651    
+## SibSpX5     -2.548e+00  8.563e-01  -2.976  0.00292 ** 
+## SibSpX3     -1.550e+00  9.098e-01  -1.704  0.08836 .  
+## SibSpX6     -1.517e+01  1.382e+03  -0.011  0.99124    
+## SibSpX7     -1.615e+01  7.568e+02  -0.021  0.98297    
+## ParchX2      6.854e-01  3.374e-01   2.031  0.04221 *  
+## ParchX3      1.251e-01  4.084e-01   0.306  0.75938    
+## ParchX6      8.154e-01  1.481e+00   0.551  0.58190    
+## ParchX4     -1.601e+01  1.213e+03  -0.013  0.98947    
+## ParchX5     -1.613e+01  1.199e+03  -0.013  0.98927    
+## ParchX7     -1.683e+01  2.400e+03  -0.007  0.99441    
+## Fare         4.215e-03  2.961e-03   1.423  0.15465    
+## EmbarkedX1   3.141e-01  4.344e-01   0.723  0.46969    
+## EmbarkedX2  -1.166e-01  2.793e-01  -0.417  0.67632    
+## ---
+## Signif. codes:  0 '***' 0.001 '**' 0.01 '*' 0.05 '.' 0.1 ' ' 1
+## 
+## (Dispersion parameter for binomial family taken to be 1)
+## 
+##     Null deviance: 887.35  on 666  degrees of freedom
+## Residual deviance: 567.76  on 647  degrees of freedom
+## AIC: 607.76
+## 
+## Number of Fisher Scoring iterations: 15</code></pre>
+<pre class="r"><code>anova(model, test = &quot;Chisq&quot;)</code></pre>
+<pre><code>## Analysis of Deviance Table
+## 
+## Model: binomial, link: logit
+## 
+## Response: Survived
+## 
+## Terms added sequentially (first to last)
+## 
+## 
+##          Df Deviance Resid. Df Resid. Dev  Pr(&gt;Chi)    
+## NULL                       666     887.35              
+## Pclass    2   70.890       664     816.46 4.041e-16 ***
+## Sex       1  197.646       663     618.82 &lt; 2.2e-16 ***
+## Age       1   13.836       662     604.98 0.0001995 ***
+## SibSp     6   19.858       656     585.12 0.0029347 ** 
+## Parch     6   13.186       650     571.94 0.0401819 *  
+## Fare      1    2.837       649     569.10 0.0921012 .  
+## Embarked  2    1.343       647     567.76 0.5109897    
+## ---
+## Signif. codes:  0 '***' 0.001 '**' 0.01 '*' 0.05 '.' 0.1 ' ' 1</code></pre>
+<pre class="r"><code>anova(model_cv$finalModel, test = &quot;Chisq&quot;)</code></pre>
+<pre><code>## Analysis of Deviance Table
+## 
+## Model: binomial, link: logit
+## 
+## Response: .outcome
+## 
+## Terms added sequentially (first to last)
+## 
+## 
+##            Df Deviance Resid. Df Resid. Dev  Pr(&gt;Chi)    
+## NULL                         666     887.35              
+## PclassX1    1    5.387       665     881.97 0.0202878 *  
+## PclassX2    1   65.503       664     816.46 5.804e-16 ***
+## SexX1       1  197.646       663     618.82 &lt; 2.2e-16 ***
+## Age         1   13.836       662     604.98 0.0001995 ***
+## SibSpX1     1    2.671       661     602.31 0.1021911    
+## SibSpX4     1    0.231       660     602.08 0.6304342    
+## SibSpX5     1    7.406       659     594.68 0.0065024 ** 
+## SibSpX3     1    2.098       658     592.58 0.1474591    
+## SibSpX6     1    1.187       657     591.39 0.2758587    
+## SibSpX7     1    6.265       656     585.12 0.0123166 *  
+## ParchX2     1    5.186       655     579.94 0.0227719 *  
+## ParchX3     1    0.310       654     579.63 0.5777023    
+## ParchX6     1    0.350       653     579.28 0.5538879    
+## ParchX4     1    2.482       652     576.80 0.1151688    
+## ParchX5     1    3.267       651     573.53 0.0706845 .  
+## ParchX7     1    1.591       650     571.94 0.2072526    
+## Fare        1    2.837       649     569.10 0.0921012 .  
+## EmbarkedX1  1    1.169       648     567.93 0.2795907    
+## EmbarkedX2  1    0.174       647     567.76 0.6768149    
+## ---
+## Signif. codes:  0 '***' 0.001 '**' 0.01 '*' 0.05 '.' 0.1 ' ' 1</code></pre>
+<p>We use summary and ANOVA analysis to assess the usefulness of each variable. In this case we have 5 variables that appear significant: <em>Pclass, Sexm, Age, SibSp and Embarked</em>. But using ANOVA we see that only 3 of them really contribute significantly to the result: <em>Pclass, Sex and Age</em>. The cross validated model is largely similar.</p>
+<p>Next we look at the confusion matrix and other metrics of performance against the test set which we split earlier. Note that the positive class is defined here as <em>Survived = X2</em> (did not survive)</p>
+<pre class="r"><code>fitted_results &lt;- 
+  data.frame(probability = predict(model,
+                                   newdata=titanic_test %&gt;% select(-Name),
+                                   type='response'),
+             probability_cv = predict(model_cv,
+                                      newdata=titanic_test %&gt;%
+                                        select(-Name),
+                                      type='prob')[[1]],
+             class_cv = predict(model_cv, 
+                                newdata=titanic_test %&gt;% select(-Name),
+                                type=&quot;raw&quot;))
+
+fitted_results$class &lt;- ifelse(fitted_results$probability &gt; 0.5,'X2','X1')
+confusionMatrix(fitted_results$class, titanic_test$Survived)</code></pre>
+<pre><code>## Confusion Matrix and Statistics
+## 
+##           Reference
+## Prediction  X1  X2
+##         X1 119  27
+##         X2  18  58
+##                                           
+##                Accuracy : 0.7973          
+##                  95% CI : (0.7383, 0.8481)
+##     No Information Rate : 0.6171          
+##     P-Value [Acc &gt; NIR] : 6.056e-09       
+##                                           
+##                   Kappa : 0.5623          
+##  Mcnemar's Test P-Value : 0.233           
+##                                           
+##             Sensitivity : 0.8686          
+##             Specificity : 0.6824          
+##          Pos Pred Value : 0.8151          
+##          Neg Pred Value : 0.7632          
+##              Prevalence : 0.6171          
+##          Detection Rate : 0.5360          
+##    Detection Prevalence : 0.6577          
+##       Balanced Accuracy : 0.7755          
+##                                           
+##        'Positive' Class : X1              
+## </code></pre>
+<pre class="r"><code>confusionMatrix(fitted_results$class_cv, titanic_test$Survived)</code></pre>
+<pre><code>## Confusion Matrix and Statistics
+## 
+##           Reference
+## Prediction  X1  X2
+##         X1 119  27
+##         X2  18  58
+##                                           
+##                Accuracy : 0.7973          
+##                  95% CI : (0.7383, 0.8481)
+##     No Information Rate : 0.6171          
+##     P-Value [Acc &gt; NIR] : 6.056e-09       
+##                                           
+##                   Kappa : 0.5623          
+##  Mcnemar's Test P-Value : 0.233           
+##                                           
+##             Sensitivity : 0.8686          
+##             Specificity : 0.6824          
+##          Pos Pred Value : 0.8151          
+##          Neg Pred Value : 0.7632          
+##              Prevalence : 0.6171          
+##          Detection Rate : 0.5360          
+##    Detection Prevalence : 0.6577          
+##       Balanced Accuracy : 0.7755          
+##                                           
+##        'Positive' Class : X1              
+## </code></pre>
+<p>Reasonably good accuracy can be seen that is better than the no information rate, with maybe a weakness on prediciting the negative class (those who did survive) displayed by the lower specificity. Interestingly both the cross-validated version converged on the same solution as the the one without CV. Suggests that the model is probably performing as well as it can with this dataset and setup.</p>
+</div>
+<div id="roc-analysis" class="section level3">
+<h3>ROC Analysis</h3>
+<p>Considering a fairly balanced response class, a ROC analysis is valid.</p>
+<pre class="r"><code>table(titanic_raw$Survived)</code></pre>
+<pre><code>## 
+##   0   1 
+## 549 342</code></pre>
+<pre class="r"><code>ROC_predictions &lt;- prediction(fitted_results$probability,
+                               titanic_test$Survived)
+ROC_performance &lt;- performance(ROC_predictions, measure = &quot;tpr&quot;,
+                               x.measure=&quot;fpr&quot;)
+
+plot(ROC_performance)</code></pre>
+<p><img src="data:image/png;base64,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" width="672" /></p>
+<pre class="r"><code>auc &lt;- performance(ROC_predictions, measure = &quot;auc&quot;)
+auc@y.values</code></pre>
+<pre><code>## [[1]]
+## [1] 0.8440103</code></pre>
 </div>
 </div>
 
