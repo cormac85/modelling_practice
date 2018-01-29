@@ -1,0 +1,184 @@
+---
+title: "Diabetic Outcomes"
+author: "Cormac Nolan"
+date: "28 January 2018"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+set.seed(413)
+```
+
+```{r packages_and_data, warning=FALSE, message=FALSE}
+library(tidyverse)
+library(cluster)
+library(knitr)
+library(Rtsne)
+library(FactoMineR)
+library(factoextra)
+
+diabetes_raw <- 
+  read_csv("./data/dataset_diabetes/diabetic_data.csv", na='?') %>% 
+  mutate_if(is.character, factor)
+```
+
+```{r functions}
+
+calc_silhouette <- function(distances, k){
+  silhouette_width <- c(NA)
+  for(i in 2:k){
+    pam_fit <- pam(distances, diss = TRUE, k = i)
+    silhouette_width[i] <- pam_fit$silinfo$avg.width
+  }  
+  silhouette_width
+}
+
+get_gower_extremes <- function(gower_distance_object) {
+  
+  diabetes_gower_matrix <- gower_distance_object %>% as.matrix
+  list(most_similar = 
+  diabetes_clean_sample[
+    which(diabetes_gower_matrix ==
+            min(diabetes_gower_matrix[diabetes_gower_matrix !=
+                                        min(diabetes_gower_matrix)
+                                      ]
+            ),
+          arr.ind = TRUE)[1, ], ]
+  ,
+  least_similar = diabetes_clean_sample[
+    which(diabetes_gower_matrix ==
+            max(diabetes_gower_matrix[diabetes_gower_matrix !=
+                                        max(diabetes_gower_matrix)
+                                      ]
+            ),
+          arr.ind = TRUE)[1, ], ]
+  )
+}
+
+```
+
+## Diabetes {.tabset}
+All work here based on this [r-bloggers post](https://www.r-bloggers.com/clustering-mixed-data-types-in-r/) by [Daniel P. Martin of Wicked Good Data.](https://dpmartin42.github.io/)
+
+Data sourced from the [UCI Machine Learning Repository.](https://archive.ics.uci.edu/ml/datasets.html?area=&att=&format=&numAtt=&numIns=&sort=nameUp&task=clu&type=&view=table)
+
+
+### Explore
+```{r explore}
+# diabetes_raw %>% View()
+
+diabetes_raw %>% summary()
+
+diabetes_raw %>% group_by(weight) %>% tally() # weight
+diabetes_raw %>% group_by(age) %>% tally()
+
+```
+Some of the variables seem less useful for cluster, for example weight is only present for a tiny minority of cases. Various identification numbers should also be removed before clustering or modelling.
+
+
+### Clean
+```{r clean}
+diabetes_clean <-
+  diabetes_raw %>% 
+  select(-payer_code, -encounter_id)
+
+diabetes_clean_sample <- diabetes_clean %>% sample_frac(0.02)
+
+```
+
+### Clustering
+First we calculate the distance metric. The full dataset is far too large to calculate a matrix of Gower distances for each patient so we have created a random sample of ~2k. We can then use these distances to cluster the pateints. Here we'll calculate the gower distance and then perform a quick sanity check on the most and least similar pairs.
+```{r distance calculation, cache=TRUE}
+diabetes_gower_dist <- 
+  diabetes_clean_sample %>% select(-readmitted, -patient_nmb) %>% 
+  daisy(metric="gower")
+
+get_gower_extremes(diabetes_gower_dist) %>% lapply(kable)
+
+```
+
+First we need to check which cluster size works best using the Silhouette method.
+```{r number of clusters}
+silhouette_width <- calc_silhouette(diabetes_gower_dist, k = 10)
+
+ggplot(data.frame(k = 1:10, silhouette_width),
+       aes(x = k, y = silhouette_width)) + 
+  geom_point() +
+  geom_line() +
+  scale_x_continuous(breaks = 2:10, labels = 2:10) +
+  labs(y="Silhouette Width", title="Silhouette Width") +
+  theme_bw()
+```
+
+k=4 seems to be a pretty good estimate.
+
+
+```{r PAM Clustering}
+pam_fit <- pam(diabetes_gower_dist, diss = TRUE, k = 4)
+pam_fit_k5 <- pam(diabetes_gower_dist, diss = TRUE, k = 5)
+
+diabetes_clean_sample %>%
+  filter(row_number() %in% pam_fit$medoids) %>% kable()# View()
+
+```
+
+### Visualisation & Assessment
+Looking at the t-SNE plot below (which allows visualisation of multi-variate data in a lower dimensional space), I have a few thoughts. There might be too many or too few clusters; there might be too many variables to adequately project into lower dimensions; there might be too many variables in general which is confusing the analysis. Next steps might be to use PCA
+```{r}
+diabetes_tsne <- Rtsne(diabetes_gower_dist, is_distance = TRUE)
+diabetes_tsne_k5 <- Rtsne(diabetes_gower_dist, is_distance = TRUE)
+
+diabetes_tsne_data <- diabetes_tsne$Y %>%
+  data.frame() %>%
+  setNames(c("X", "Y")) %>%
+  mutate(cluster = factor(pam_fit$clustering),
+         patient_nbr = diabetes_clean_sample$patient_nbr) 
+
+diabetes_tsne_data_k5 <- diabetes_tsne_k5$Y %>%
+  data.frame() %>%
+  setNames(c("X", "Y")) %>%
+  mutate(cluster = factor(pam_fit_k5$clustering),
+         patient_nbr = diabetes_clean_sample$patient_nbr) 
+
+diabetes_tsne_data %>% 
+  ggplot(aes(x = X, y = Y)) +
+  geom_point(aes(color = cluster)) +
+  theme_bw() +
+  labs(title="t-SNE Plot for Diabetic Clustering - k = 4")
+
+diabetes_tsne_data_k5 %>% 
+  ggplot(aes(x = X, y = Y)) +
+  geom_point(aes(color = cluster)) +
+  theme_bw() +
+  labs(title="t-SNE Plot for Diabetic Clustering - k = 5")
+
+diabetes_tsne_data %>% 
+  filter(X > 20 & X < 26,
+         Y > 5 & Y < 15) %>%
+  left_join(diabetes_clean_sample, by = "patient_nbr")
+
+```
+
+## Multiple Correspondence Analysis
+```{r MCA}
+diabetes_sample_mfa <-
+  diabetes_clean_sample %>% select(-weight)
+  MFA(group = c(1, 4, 3, 1, 
+                1, 6, 3,
+                1, 27, 1),
+      type = c("n", "n", "n", "s", 
+               "n", "s", "n",
+               "s", "n", "n"),
+      name.group=c("patient", "demographics", "admission", "admission_dur",
+                   "specialty", "procedures", "diagnoses",
+                   "num_diagnoses", "medication", "outcome"),
+      num.group.sup = c(1, 10),
+      graph = FALSE)
+
+
+
+```
