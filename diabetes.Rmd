@@ -13,6 +13,11 @@ knitr::opts_chunk$set(echo = TRUE)
 set.seed(413)
 ```
 
+```{r, eval=FALSE, echo=FALSE}
+rm(list=ls())
+load("diabetes.RData")
+```
+
 ```{r packages_and_data, warning=FALSE, message=FALSE}
 library(tidyverse)
 library(cluster)
@@ -59,6 +64,12 @@ get_gower_extremes <- function(gower_distance_object) {
   )
 }
 
+get_na_variable_count <- function(x) {
+  # gets variable name and frequency for any variables with NA
+  x %>% is.na %>% summary %>% broom::tidy() %>% 
+    filter(substr(Freq, 1, 4) == "TRUE")
+}
+
 ```
 
 ## Diabetes {.tabset}
@@ -94,10 +105,12 @@ diabetes_clean_sample <- diabetes_clean %>% sample_frac(0.02)
 First we calculate the distance metric. The full dataset is far too large to calculate a matrix of Gower distances for each patient so we have created a random sample of ~2k. We can then use these distances to cluster the pateints. Here we'll calculate the gower distance and then perform a quick sanity check on the most and least similar pairs.
 ```{r distance calculation, cache=TRUE}
 diabetes_gower_dist <- 
-  diabetes_clean_sample %>% select(-readmitted, -patient_nmb) %>% 
+  diabetes_clean_sample %>% select(-readmitted, -patient_nbr) %>% 
   daisy(metric="gower")
 
-get_gower_extremes(diabetes_gower_dist) %>% lapply(kable)
+gower_extremes <- get_gower_extremes(diabetes_gower_dist) 
+gower_extremes[[1]]
+gower_extremes[[2]]
 
 ```
 
@@ -114,15 +127,20 @@ ggplot(data.frame(k = 1:10, silhouette_width),
   theme_bw()
 ```
 
-k=4 seems to be a pretty good estimate.
-
-
+Looking at the medoids might be misleading and if we do a summary of the first cluster for example, the results are largely similar (not evaluated here for brevity). Not sure what to make of this, what exactly are the variables the clusters are being chosen by?
 ```{r PAM Clustering}
 pam_fit <- pam(diabetes_gower_dist, diss = TRUE, k = 4)
 pam_fit_k5 <- pam(diabetes_gower_dist, diss = TRUE, k = 5)
 
 diabetes_clean_sample %>%
   filter(row_number() %in% pam_fit$medoids) %>% kable()# View()
+
+diabetes_clean_sample %>%
+  filter(row_number() %in% pam_fit_k5$medoids) %>% kable()
+
+# diabetes_clean_sample %>%
+#   mutate(cluster = pam_fit_k5$clustering) %>% 
+#   filter(cluster == 1) %>% summary()
 
 ```
 
@@ -156,29 +174,37 @@ diabetes_tsne_data_k5 %>%
   theme_bw() +
   labs(title="t-SNE Plot for Diabetic Clustering - k = 5")
 
-diabetes_tsne_data %>% 
-  filter(X > 20 & X < 26,
-         Y > 5 & Y < 15) %>%
-  left_join(diabetes_clean_sample, by = "patient_nbr")
-
 ```
 
-## Multiple Correspondence Analysis
-```{r MCA}
+
+## Multiple Factor Analysis
+Having trouble with (what I think is) sparse variables in some of the factors when running MFA. Not sure if I can compress them into one variable or just drop them. 
+```{r MCF, eval=FALSE}
+# Can't have NA's in MCF.
+get_na_variable_count(diabetes_clean_sample)
+
+diabetes_clean_sample_na.rm <- 
+  diabetes_clean_sample %>% select(-weight, -medical_specialty) %>% 
+  filter(!is.na(race), !is.na(diag_1), !is.na(diag_2), !is.na(diag_3)) %>% 
+  mutate(admission_type_id = as.factor(admission_type_id),
+         discharge_disposition_id = as.factor(discharge_disposition_id),
+         admission_source_id = as.factor(admission_source_id),
+         patient_nbr = as.factor(patient_nbr))
+
+get_na_variable_count(diabetes_clean_sample_na.rm) # No NA!
+  
 diabetes_sample_mfa <-
-  diabetes_clean_sample %>% select(-weight)
-  MFA(group = c(1, 4, 3, 1, 
-                1, 6, 3,
+  diabetes_clean_sample_na.rm %>% 
+  MFA(group = c(1, 3, 3,
+                7, 3,
                 1, 27, 1),
-      type = c("n", "n", "n", "s", 
-               "n", "s", "n",
+      type = c("n", "n", "n",
+               "s", "n",
                "s", "n", "n"),
-      name.group=c("patient", "demographics", "admission", "admission_dur",
-                   "specialty", "procedures", "diagnoses",
+      name.group=c("patient", "demographics", "admission", 
+                   "procedures", "diagnoses",
                    "num_diagnoses", "medication", "outcome"),
-      num.group.sup = c(1, 10),
+      num.group.sup = c(1, 8),
       graph = FALSE)
-
-
 
 ```
