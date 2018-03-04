@@ -1,0 +1,134 @@
+---
+title: "Loan Prediction"
+author: "Cormac Nolan"
+date: "3 March 2018"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+---
+title: "Modelling Practice"
+author: "Cormac Nolan"
+date: "24 January 2018"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+## Setup {.tabset}
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message=FALSE, warning=TRUE, error=TRUE)
+
+set.seed(413)
+```
+
+
+```{r packages_and_data, warning=FALSE}
+library(tidyverse)
+library(caret)
+library(knitr)
+library(ROCR)
+loan_raw <- read_csv("./data/loan_prediction/train.csv") 
+
+```
+
+### Explore & Clean
+Our first look at the data shows a few missing values spread thinly across quite a few variables. Might be a good candidate for imputation.
+
+Here we replace any missing values with NA and change any obviously Boolean variables to R logical.
+```{r explore & clean 1}
+summary(loan_raw %>% mutate_at(c(2,3,4,5,6,11,12,13), as.factor))
+
+loan_clean <- loan_raw %>% 
+  mutate(Gender = replace(Gender, Gender == "", NA),
+         Married = replace(Married, Married == "", NA) %>% as.character(),
+         Self_Employed = replace(Self_Employed, Self_Employed == "", NA) %>%
+           as.character(),
+         Credit_History = as.logical(Credit_History)) %>% 
+  mutate(Married = replace(Married, Married == "Yes", TRUE),
+         Married = replace(Married, Married == "No", FALSE) %>% as.logical(),
+         Self_Employed = replace(Self_Employed, Self_Employed == "Yes", 
+                                 TRUE),
+         Self_Employed = replace(Self_Employed, Self_Employed == "No",
+                                 FALSE) %>% as.logical(),
+         Loan_Status = replace(Loan_Status, Loan_Status == "Y", TRUE),
+         Loan_Status = replace(Loan_Status, Loan_Status == "N", FALSE),
+         # Loan Term is really an ordered factor, not numeric.
+         Loan_Amount_Term = Loan_Amount_Term %>% factor(ordered = TRUE))
+
+loan_clean %>% is.na() %>% table()
+
+```
+
+Our cleaned data set, looking good.
+```{r explore & clean 2}
+summary(loan_clean %>% mutate_at(c(2,3,4,5,6,11,12,13), as.factor))
+
+```
+
+A quick scatter-plot matrix shows there might be a correlation between applicant's income and their loan amount, possibly a similar but weaker effect for co-applicant's income.
+```{r explore & clean 2}
+loan_clean %>% select_if(is.numeric) %>% pairs()
+
+```
+
+Scaling before doing a density plot shows a seemingly skewed distribution with a tail to the right. These will likely need normalising before modelling. 
+```{r explore & clean 2}
+loan_clean %>% select_if(is.numeric) %>% 
+  scale() %>% as.data.frame() %>% 
+  gather() %>% 
+  ggplot(aes(value, colour = key)) +
+  geom_density() +
+  facet_wrap(~key)
+
+```
+
+### Imputation & Pre-Processing
+A few "gotcha's" with using missForest, first that it can't handle tibbles, so be careful of dplyr output. The second is that it expects factors for categorical variables. The errors it returns in both situations could be better. 
+
+I've removed the target variable from the imputation as it seems dangerous to use a target variable in order to create data points that are then used to predict the target.
+```{r impute with missForest}
+
+loan_clean_imp_obj <- 
+  missForest::missForest(loan_clean %>% 
+                           select(-Loan_ID, -Loan_Status) %>% 
+                           mutate_if(is.character, as.factor) %>% 
+                           as.data.frame)
+
+loan_clean_imputed <- loan_clean_imp_obj$ximp %>% 
+  mutate(Loan_ID = loan_clean$Loan_ID,
+         Loan_Status = loan_clean$Loan_Status)
+
+```
+
+
+### Modelling
+Can't seem to find any highly correlated variables. Should be ok to proceed with them as is.
+```{r preprocessing 1}
+
+cor(loan_clean %>% select_if(is.numeric)) %>% summary()
+findCorrelation(cor(loan_clean %>% select_if(is.numeric)), cutoff = 0.75)
+
+
+```
+
+We need to normalise the numeric variables.
+```{r preprocessing 2}
+
+pre_proc_clean <- preProcess(loan_clean, method = c("center", "scale"))
+pre_proc_imputed <- preProcess(loan_clean_imputed, 
+                               method = c("center", "scale"))
+
+```
+
+
+```{r train control}
+control <- trainControl(method = "repeatedcv", number = 10, repeats = 10)
+
+```
+
+```{r training}
+
+
+```
