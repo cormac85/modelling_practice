@@ -4,3 +4,5 @@
 .Ruserdata
 diabetes_cache/
 diabetes_files/
+rsconnect/
+*.html
