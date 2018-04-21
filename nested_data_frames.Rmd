@@ -1,0 +1,155 @@
+---
+title: "Nest Data Frames & Viz - tidyr, purr, broom"
+author: "Cormac Nolan"
+date: "21 April 2018"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+This document shows how to use nested data frames with functional programming ideas to perform modelling at scale. Completely based on Hadley Wickham's talk [here](https://youtu.be/cU0-NrUxRw4) and a transcription by Aaron Saunders [here](https://rpubs.com/aaronsaunders/237010)
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+```
+
+## Get & Clean
+```{r, warning = FALSE, message= FALSE}
+library(dplyr)
+library(tidyr)
+library(broom)
+library(purrr)
+library(ggplot2)
+
+by_country <- gapminder::gapminder %>% 
+  mutate(year1950 = year - 1950) %>% 
+  group_by(continent, country) %>% 
+  nest()
+```
+
+Set up the modelling function that can be used to map to the data frames 
+```{r}
+country_model <- function(df){
+  lm(lifeExp ~ year1950, data = df)
+}
+```
+
+And then create the models using this function, while extracting information from the models using broom. 
+```{r}
+models <- by_country %>% 
+  mutate(model = map(data, country_model)) %>% 
+        # glance gets the model summary variables
+  mutate(glance = map(model, broom::glance), 
+         rsq = glance %>% map_dbl("r.squared"),
+         # tidy gets summary variables of the model coefficients
+         tidy = map(model, broom::tidy),
+         # augment gets per observation variables (e.g., residuals)
+         augment = map(model, broom::augment))
+
+```
+
+## Plotting Model Statistics
+Plot the statistics you're interested in relating to the data and models.
+```{r}
+models %>% 
+  ggplot(aes(rsq, reorder(country, rsq))) +
+  geom_point(aes(colour = continent)) +
+  labs(y = "Country") +
+  theme_minimal() +
+  theme(axis.text.y = element_blank(),
+        axis.ticks.y = element_blank(),
+        panel.grid = element_blank(),
+        panel.grid.major.x = element_line(colour = "grey"),
+        panel.background = element_blank())
+```
+
+You can "unnest" a nested list to access it.
+```{r}
+models %>% unnest(tidy)
+```
+
+We can unnest and wrangle data into a form that ggplot can use quite easily. Note that the area of the points scales with the R^2^ of the model, so the African countries near the bottom are probably not being modelled well by a steady increase in life expectancy over time.
+```{r}
+models %>% 
+  unnest(tidy) %>% 
+  select(continent, country, term, estimate, rsq) %>% 
+  spread(term, estimate) %>% 
+  ggplot(aes(`(Intercept)`, year1950)) +
+  geom_point(aes(colour = continent, size = rsq)) +
+  geom_smooth(se = FALSE) +
+  scale_size_area() +
+  theme_minimal()
+```
+
+## Plotting Residuals
+Can you imagine trying to plot the residuals for these 142 models in a different fashion? Without being careful you could end up with some very complicated and difficult to read code. We can do this in a few lines using these nested data frames by again using unnest to "pluck out" the augment data frame and access it's variables, which includes the residuals.
+```{r}
+models %>% 
+  unnest(augment) %>% 
+  ggplot(aes(year1950, .resid)) +
+  geom_line(aes(group = country), alpha = 0.3) +
+  geom_hline(yintercept = 0, colour = "red", size = 1) +
+  geom_smooth(se = FALSE, size = 1.5) +
+  facet_wrap( ~ continent) +
+  theme_minimal()
+```
+
+## Digging Through Model Output
+So we noticed some African countries that seemed like outliers in regards R^2^.
+```{r}
+models %>% unnest(glance) %>% arrange(r.squared)
+```
+
+Let's get a list of these and then have a look at their original data. We should notice a most certain non-linear shape to the relationship and Rwanda seeming to be an outlier even among these countries.
+```{r}
+bad_fit <- models %>% unnest(glance) %>% filter(r.squared < 0.25)
+
+by_country %>% filter(country %in% bad_fit$country) %>% 
+  unnest(data) %>% 
+  ggplot(aes(year, lifeExp, colour = country)) +
+  geom_line() +
+  theme_minimal()
+
+
+```
+
+## Quadratic Fit to Badly Fitting Countries
+As suggested by Hadley in his lecture, a quadratic might be a better fit. So here I show how we can generate new models with the same tidied statistics, but using a polynomial of rank 3 instead of a normal linear regression.
+```{r}
+country_poly_model <- function(df){
+  lm(lifeExp ~ poly(year1950, 3), data = df)
+}
+
+poly_models <-
+  models %>% filter(country %in% bad_fit$country) %>% 
+  mutate(model = map(data, country_poly_model)) %>% 
+  mutate(glance = map(model, broom::glance), 
+         rsq = glance %>% map_dbl("r.squared"),
+         tidy = map(model, broom::tidy),
+         augment = map(model, broom::augment))
+
+models <-
+  models %>% 
+  anti_join(poly_models, by = "country") %>% 
+  bind_rows(poly_models)
+
+rm(poly_models, bad_fit)
+```
+
+In retrospect, this pattern of mapping a new model to a subset, and then replacing it into the original data frame, should be wrapped up in a function or two.
+
+Re-plotting the new models we can see the outlier African countries are now closer to the rest of the population. You could probably think of a way to identify which models are polynomial and which are linear in the plot.
+```{r}
+models %>% 
+  ggplot(aes(rsq, reorder(country, rsq))) +
+  geom_point(aes(colour = continent)) +
+  labs(y = "Country") +
+  theme_minimal() +
+  theme(axis.text.y = element_blank(),
+        axis.ticks.y = element_blank(),
+        panel.grid = element_blank(),
+        panel.grid.major.x = element_line(colour = "grey"),
+        panel.background = element_blank())
+```
+
+**NB** There is some sort of bug around trying to unnest the *augment* nested data frame, where the model residuals live for example. Not sure if I'm missing something or the package itself has a problem.
