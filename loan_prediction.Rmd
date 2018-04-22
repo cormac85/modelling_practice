@@ -6,14 +6,7 @@ output: html_document
 editor_options: 
   chunk_output_type: console
 ---
----
-title: "Modelling Practice"
-author: "Cormac Nolan"
-date: "24 January 2018"
-output: html_document
-editor_options: 
-  chunk_output_type: console
----
+
 
 ## Setup {.tabset}
 
@@ -30,6 +23,26 @@ library(caret)
 library(knitr)
 library(ROCR)
 loan_raw <- read_csv("./data/loan_prediction/train.csv") 
+loan_test_raw <- read_csv("./data/loan_prediction/test.csv") 
+
+```
+
+```{r functions}
+clean_loan_data <- function(raw){
+  raw %>% 
+    mutate(Gender = replace(Gender, Gender == "", NA),
+           Married = replace(Married, Married == "", NA) %>% as.character(),
+           Self_Employed = replace(Self_Employed, 
+                                   Self_Employed == "", NA) %>%
+             as.character(),
+           Loan_Amount_Term = Loan_Amount_Term %>% factor(ordered = TRUE),
+           Credit_History = as.character(Credit_History),
+           Credit_History = 
+             replace(Credit_History, Credit_History == "1", "Y"),
+           Credit_History = 
+             replace(Credit_History, Credit_History == "0", "N")) %>% 
+     mutate_at(c(2,3,4,5,6,11,12), as.factor)
+}
 
 ```
 
@@ -38,32 +51,13 @@ Our first look at the data shows a few missing values spread thinly across quite
 
 Here we replace any missing values with NA and change any obviously Boolean variables to R logical.
 ```{r explore & clean 1}
-summary(loan_raw %>% mutate_at(c(2,3,4,5,6,11,12,13), as.factor))
 
-loan_clean <- loan_raw %>% 
-  mutate(Gender = replace(Gender, Gender == "", NA),
-         Married = replace(Married, Married == "", NA) %>% as.character(),
-         Self_Employed = replace(Self_Employed, Self_Employed == "", NA) %>%
-           as.character(),
-         Credit_History = as.logical(Credit_History)) %>% 
-  mutate(Married = replace(Married, Married == "Yes", TRUE),
-         Married = replace(Married, Married == "No", FALSE) %>% as.logical(),
-         Self_Employed = replace(Self_Employed, Self_Employed == "Yes", 
-                                 TRUE),
-         Self_Employed = replace(Self_Employed, Self_Employed == "No",
-                                 FALSE) %>% as.logical(),
-         Loan_Status = replace(Loan_Status, Loan_Status == "Y", TRUE),
-         Loan_Status = replace(Loan_Status, Loan_Status == "N", FALSE),
-         # Loan Term is really an ordered factor, not numeric.
-         Loan_Amount_Term = Loan_Amount_Term %>% factor(ordered = TRUE))
+loan_clean <- clean_loan_data(loan_raw) %>% 
+  mutate(Loan_Status = as.factor(Loan_Status))
+
+test_clean <- clean_loan_data(loan_test_raw)
 
 loan_clean %>% is.na() %>% table()
-
-```
-
-Our cleaned data set, looking good.
-```{r explore & clean 2}
-summary(loan_clean %>% mutate_at(c(2,3,4,5,6,11,12,13), as.factor))
 
 ```
 
@@ -80,28 +74,11 @@ loan_clean %>% select_if(is.numeric) %>%
   gather() %>% 
   ggplot(aes(value, colour = key)) +
   geom_density() +
-  facet_wrap(~key)
+  facet_wrap(~key) +
+  theme_minimal() +
+  theme(legend.position = "none")
 
 ```
-
-### Imputation & Pre-Processing
-A few "gotcha's" with using missForest, first that it can't handle tibbles, so be careful of dplyr output. The second is that it expects factors for categorical variables. The errors it returns in both situations could be better. 
-
-I've removed the target variable from the imputation as it seems dangerous to use a target variable in order to create data points that are then used to predict the target.
-```{r impute with missForest}
-
-loan_clean_imp_obj <- 
-  missForest::missForest(loan_clean %>% 
-                           select(-Loan_ID, -Loan_Status) %>% 
-                           mutate_if(is.character, as.factor) %>% 
-                           as.data.frame)
-
-loan_clean_imputed <- loan_clean_imp_obj$ximp %>% 
-  mutate(Loan_ID = loan_clean$Loan_ID,
-         Loan_Status = loan_clean$Loan_Status)
-
-```
-
 
 ### Modelling
 Can't seem to find any highly correlated variables. Should be ok to proceed with them as is.
@@ -110,25 +87,77 @@ Can't seem to find any highly correlated variables. Should be ok to proceed with
 cor(loan_clean %>% select_if(is.numeric)) %>% summary()
 findCorrelation(cor(loan_clean %>% select_if(is.numeric)), cutoff = 0.75)
 
-
 ```
 
 We need to normalise the numeric variables.
 ```{r preprocessing 2}
-
 pre_proc_clean <- preProcess(loan_clean, method = c("center", "scale"))
-pre_proc_imputed <- preProcess(loan_clean_imputed, 
-                               method = c("center", "scale"))
-
+loan_clean_preproc <-predict(pre_proc_clean, loan_clean)
 ```
 
-
+### Modelling
 ```{r train control}
 control <- trainControl(method = "repeatedcv", number = 10, repeats = 10)
-
 ```
 
 ```{r training}
+loan_clean_fit <-
+  train(Loan_Status ~ Credit_History + Property_Area, 
+        data = ((loan_clean_preproc %>%
+                  select(-Loan_ID) %>% na.omit %>% data.frame)
+                ),
+        method="glm", family="binomial", trControl=control,
+        na.action = na.pass)
+
+loan_clean_dumb_fit <- 
+  glm(Loan_Status ~ Credit_History + Property_Area,
+      data = ((loan_clean_preproc %>%
+                  select(-Loan_ID) %>% na.omit %>% data.frame)
+                ),
+      family = "binomial")
+
+```
+
+### Model Assessment
+
+```{r assessment 1}
+
+loan_clean_fit$finalModel %>% summary()
+
+varImp(loan_clean_dumb_fit)
+varImp(loan_clean_fit)
 
 
 ```
+
+```{r}
+loan_clean$dumb_pred <-
+  predict(loan_clean_dumb_fit, 
+        loan_clean,
+        type = "response")
+
+loan_clean <-
+  loan_clean %>% 
+  mutate(dumb_pred_class = ifelse(dumb_pred > 0.5, "Y", "N"))
+
+rocr_pred_dumb_fit <- prediction(loan_clean$dumb_pred,
+                                 loan_clean$Loan_Status)
+
+rocr_perf_dumb_fit <- performance(rocr_pred_dumb_fit,
+                                  "tpr", "fpr")
+dumb_auc <- performance(rocr_pred_dumb_fit, "auc")@y.values[[1]]
+
+ggplot(data = tibble(fpr = rocr_perf_dumb_fit@x.values[[1]],
+                     tpr = rocr_perf_dumb_fit@y.values[[1]]),
+       aes(fpr, tpr, group = 1)) +
+  geom_line(size = 1) +
+  theme_minimal() +
+  geom_abline(intercept = 0, slope = 1, linetype = 2) +
+  annotate("text", x = 0.75, y = 0.25, label = paste("AUC =", dumb_auc))
+```
+
+### Model Assessment - Test Data
+```{r}
+
+```
+
