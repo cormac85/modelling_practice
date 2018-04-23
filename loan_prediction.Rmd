@@ -68,7 +68,7 @@ loan_clean %>% select_if(is.numeric) %>% pairs()
 ```
 
 Scaling before doing a density plot shows a seemingly skewed distribution with a tail to the right. These will likely need normalising before modelling. 
-```{r explore & clean 2}
+```{r explore & clean 3}
 loan_clean %>% select_if(is.numeric) %>% 
   scale() %>% as.data.frame() %>% 
   gather() %>% 
@@ -156,8 +156,11 @@ ggplot(data = tibble(fpr = rocr_perf_dumb_fit@x.values[[1]],
   annotate("text", x = 0.75, y = 0.25, label = paste("AUC =", dumb_auc))
 ```
 
-### Model Assessment - Test Data
+Good at predicting "N", worse at predicting "Y". Don't know what's more valuable to the user here but could be worth trading off the FPR and FNR a bit if required.
 ```{r}
 
+caret::confusionMatrix(loan_clean$dumb_pred_class,
+                                 loan_clean$Loan_Status)
 ```
+
 
