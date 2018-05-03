@@ -21,10 +21,29 @@ library(tidyverse)
 library(caret)
 library(knitr)
 library(ROCR)
-titanic_raw <- read_csv("./data/train.csv")
+titanic_raw <- read_csv("../data/train.csv")
 
 ```
 
+
+```{r functions}
+plot_rocr <- function(roc_pred){
+  
+  roc_perf <- performance(roc_pred, measure = "tpr", x.measure="fpr")
+  roc_data <- tibble(fpr = roc_perf@x.values[[1]],
+                     tpr = roc_perf@y.values[[1]])
+  
+  ggplot(data = roc_data, aes(fpr, tpr, group = 1)) +
+    geom_line(size = 1) +
+    theme_minimal() +
+    geom_abline(intercept = 0, slope = 1, linetype = 2) +
+    annotate("text", x = 0.75, y = 0.25, 
+             label = 
+               paste("AUC =", 
+                     performance(roc_pred, measure = "auc")@y.values[[1]]))
+}
+
+```
 ### Explore
 Check for NA's
 ```{r explore}
@@ -43,29 +62,23 @@ titanic_raw %>% tally() %>%
 ```{r clean}
 titanic_clean <- 
   titanic_raw %>% select(-Cabin, -PassengerId, -Ticket) %>% 
-  mutate(Age = ifelse(is.na(Age), mean(Age, na.rm=TRUE), Age)) %>% 
+  mutate(Age = ifelse(is.na(Age), median(Age, na.rm=TRUE), Age),
+         NumRelations = SibSp + Parch,
+         NameLength = nchar(Name),
+         Title = stringr::str_extract(Name, "(\\S+)\\s*\\.")) %>% 
   filter(!is.na(Embarked)) %>% 
+  mutate_at(vars(Survived, Pclass, SibSp, Parch),
+            make.names) %>% # make the levels of factors valid
   mutate(Survived = as.factor(Survived),
          Pclass = as.factor(Pclass),
          Sex= as.factor(Sex),
          SibSp = as.factor(SibSp),
          Parch = as.factor(Parch),
-         Embarked = as.factor(Embarked))
+         Embarked = as.factor(Embarked),
+         Title = as.factor(Title))
+```
 
-# make the levels of factors valid
-feature.names=names(titanic_clean)
-
-for (f in feature.names) {
-  if (class(titanic_clean[[f]])=="factor") {
-    levels <- unique(c(titanic_clean[[f]]))
-    titanic_clean[[f]] <- factor(titanic_clean[[f]],
-                   labels=make.names(levels))
-  }
-}
-
-# titanic_raw %>% select(-Cabin, -PassengerId, -Ticket) %>% 
-#  mutate(Age = replace(Age, is.na(Age), mean(Age, na.rm = TRUE))) %>% View()
-
+```{r train split}
 titanic_train_index <- titanic_clean$Survived %>%
   createDataPartition(p=0.75, list = FALSE, times=1)
 
@@ -76,61 +89,142 @@ titanic_test <- titanic_clean[-titanic_train_index, ]
 ### Model and Assessment
 Let's fit the model to the relevant variables. We use binomial since there are 2 possible outcomes.
 ```{r}
-train_control<- trainControl(method="cv", number=5, savePredictions = TRUE, 
-                             classProbs = TRUE)
+train_control <- 
+  trainControl(method="cv", number = 5, savePredictions = TRUE, 
+               classProbs = TRUE, preProcOptions = c("centre", "scale"))
+
+form <- Survived ~ Pclass + Sex + Age + SibSp + Parch + Fare + Embarked +
+  NumRelations + NameLength + Title
+
+tune_metric <- "Accuracy"
 
 model_cv <- 
-  train(Survived ~ Pclass + Sex + Age + SibSp + Parch + Fare + Embarked,
-        data=titanic_train, trControl=train_control, method="glm",
-        family="binomial", metric = "Kappa")
+  train(form, data=titanic_train, trControl=train_control, 
+        method="glm", family="binomial", metric = tune_metric)
+
+model_randomf <- 
+  train(form, data=titanic_train, trControl=train_control, 
+        method="rf", metric = tune_metric)
+
+model_svm <-
+  train(form, data=titanic_train, trControl=train_control,
+        method="svmRadial", metric = tune_metric)
 
 model <- 
-  glm(Survived ~ Pclass + Sex + Age + SibSp + Parch + Fare + Embarked,
-      family=binomial(link='logit'),data=titanic_train)
+  glm(form, family=binomial(link='logit'), data=titanic_train)
 
-summary(model)
 summary(model_cv)
-anova(model, test = "Chisq")
+model_cv
+model_randomf
+model_svm
 anova(model_cv$finalModel, test = "Chisq")
 
 ```
 
 We use summary and ANOVA analysis to assess the usefulness of each variable. In this case we have 5 variables that appear significant: *Pclass, Sexm, Age, SibSp and Embarked*. But using ANOVA we see that only 3 of them really contribute significantly to the result: *Pclass, Sex and Age*. The cross validated model is largely similar.
 
-Next we look at the confusion matrix and other metrics of performance against the test set which we split earlier. Note that the positive class is defined here as *Survived = X2* (did not survive)
+Next we look at the confusion matrix and other metrics of performance against the test set which we split earlier. Note that the positive class here is defined here as *Survived = X1*.
+
+Thanks to caret we can extract similar metrics between the different models, and it appears the glm model is performing better than the rondom forest.
+
+### Model Internal Assessment
+Caret allows you to calculate a confusion matrix based on all the folds of the resampled models. This should give an indication of model performance on several re-samples, but does not tell you the performance of the **final** model on the **training** dataset
+```{r}
+confusionMatrix(model_cv)
+confusionMatrix(model_randomf)
+confusionMatrix(model_svm)
+
+```
+
+Both models seem to be performing very similarly, with differences likely within model variance. Of course the only way to tell for sure is to apply it to an external dataset.
+
+Caret can also allow you to generate summary tables of metrics in order to compare model fits.
+```{r}
+results <- resamples(list(GLM = model_cv, RF = model_randomf, 
+                          SVM = model_svm))
+summary(results)
+```
+
+The random forest has a seemingly more consistent set of results and a higher median in both kappa and accuracy. 
+```{r}
+bwplot(results)
+
+densityplot(results)
+```
+
+Interestingly the two models seem to not correlate with each other at all!
+````{r}
+splom(results)
+```
+
+But at the same time we see that there is no statistically significant difference in performance of the models (lower diagonal p-value is high).
+```{r}
+diffs <- diff(results)
+summary(diffs)
+```
+
+### Model External Assessment
+Note that the simple glm model was identical to what caret generated with cross-validation.
 ```{r confusion_matrix}
+# fix model factor levels
+
+model$xlevels$Title <- union(model$xlevels$Title, levels(titanic_test$Title))
+model_cv$xlevels$Title <- union(model_cv$xlevels$Title,
+                                levels(titanic_test$Title))
+model_randomf$xlevels$Title <- union(model_randomf$xlevels$Title,
+                                     levels(titanic_test$Title))
+model_svm$xlevels$Title <- union(model_svm$xlevels$Title,
+                                 levels(titanic_test$Title))
+
 fitted_results <- 
   data.frame(probability = predict(model,
                                    newdata=titanic_test %>% select(-Name),
                                    type='response'),
-             probability_cv = predict(model_cv,
+             probability_cv = 1 - predict(model_cv,
                                       newdata=titanic_test %>%
                                         select(-Name),
                                       type='prob')[[1]],
+             probability_rf = 1 - predict(model_randomf,
+                                      newdata=titanic_test %>%
+                                        select(-Name),
+                                      type='prob')[[1]],
+             probability_svm = 1-  predict(model_svm,
+                                       newdata=titanic_test %>%
+                                         select(-Name),
+                                       type='prob')[[1]],
              class_cv = predict(model_cv, 
                                 newdata=titanic_test %>% select(-Name),
-                                type="raw"))
+                                type="raw"),
+             class_rf = predict(model_randomf, 
+                                newdata=titanic_test %>% select(-Name),
+                                type="raw"),
+             class_svm = predict(model_svm, 
+                                 newdata=titanic_test %>% select(-Name),
+                                 type="raw"))
 
-fitted_results$class <- ifelse(fitted_results$probability > 0.5,'X2','X1')
-confusionMatrix(fitted_results$class, titanic_test$Survived)
+fitted_results$class <- ifelse(fitted_results$probability > 0.5,'X1','X0')
+
 confusionMatrix(fitted_results$class_cv, titanic_test$Survived)
+confusionMatrix(fitted_results$class_rf, titanic_test$Survived)
+confusionMatrix(fitted_results$class_svm, titanic_test$Survived)
+
 ```
 
+Reasonably good accuracy can be seen that is better than the no information rate for all models, with maybe a weakness on prediciting the negative class displayed by the lower specificity. The final random forest model appears to be performing a bit better than the other. Comparing to the "averaged" performance of all the folds earlier, suggests that the best model for the random forest was quite a bit better than the average which translated through to the external assessment.
 
-Reasonably good accuracy can be seen that is better than the no information rate, with maybe a weakness on prediciting the negative class (those who did survive) displayed by the lower specificity. Interestingly both the cross-validated version converged on the same solution as the the one without CV. Suggests that the model is probably performing as well as it can with this dataset and setup.
+Question: Is the difference between the model performance significant?
 
 ### ROC Analysis
 Considering a fairly balanced response class, a ROC analysis is valid. 
 ```{r ROC}
-table(titanic_raw$Survived)
 
-ROC_predictions <- prediction(fitted_results$probability,
-                               titanic_test$Survived)
-ROC_performance <- performance(ROC_predictions, measure = "tpr",
-                               x.measure="fpr")
 
-plot(ROC_performance)
+plot_rocr(prediction(fitted_results$probability_cv,
+                               titanic_test$Survived))
+plot_rocr(prediction(fitted_results$probability_rf,
+                               titanic_test$Survived))
+plot_rocr(prediction(fitted_results$probability_svm,
+                               titanic_test$Survived))
 
-auc <- performance(ROC_predictions, measure = "auc")
-auc@y.values
+
 ```
