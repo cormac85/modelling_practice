@@ -28,7 +28,7 @@ titanic_raw <- read_csv("../data/train.csv")
 
 ```{r functions}
 plot_rocr <- function(roc_pred){
-  
+  # ggplot-style roc plot based on the ROCR package.
   roc_perf <- performance(roc_pred, measure = "tpr", x.measure="fpr")
   roc_data <- tibble(fpr = roc_perf@x.values[[1]],
                      tpr = roc_perf@y.values[[1]])
@@ -43,6 +43,16 @@ plot_rocr <- function(roc_pred){
                      performance(roc_pred, measure = "auc")@y.values[[1]]))
 }
 
+get_kappa <- function(model) {
+  # helper function for extracting from caret models
+  mean(model$resample$Kappa)
+}
+
+get_accuracy <- function(model) {
+  # helper function for extracting from caret models
+  mean(model$resample$Accuracy)
+}
+
 ```
 ### Explore
 Check for NA's
@@ -50,7 +60,7 @@ Check for NA's
 titanic_raw %>% head() %>% kable(caption = "Titanic Survivor Kaggle Dataset")
 
 # Next two do the same thing, check number of NA's
-colSums(is.na(titanic_raw)) 
+# colSums(is.na(titanic_raw)) 
 titanic_raw %>% summarise_all(function(x) sum(is.na(x))) %>% 
   knitr::kable(caption = "NA's for Each Variable")
 
@@ -88,7 +98,7 @@ titanic_test <- titanic_clean[-titanic_train_index, ]
 
 ### Model and Assessment
 Let's fit the model to the relevant variables. We use binomial since there are 2 possible outcomes.
-```{r}
+```{r, cache = TRUE}
 train_control <- 
   trainControl(method="cv", number = 5, savePredictions = TRUE, 
                classProbs = TRUE, preProcOptions = c("centre", "scale"))
@@ -96,29 +106,35 @@ train_control <-
 form <- Survived ~ Pclass + Sex + Age + SibSp + Parch + Fare + Embarked +
   NumRelations + NameLength + Title
 
-tune_metric <- "Accuracy"
+tune_metric <- "Kappa"
 
-model_cv <- 
-  train(form, data=titanic_train, trControl=train_control, 
-        method="glm", family="binomial", metric = tune_metric)
+glm_fit <- train(form, data = titanic_train,
+                 trControl=train_control,
+                 method="glm", family="binomial", 
+                 metric = tune_metric)
+rf_fit <- train(form, data=titanic_train,
+                trControl=train_control, 
+                method="rf", metric = tune_metric)
+svml_fit <- train(form, data=titanic_train,
+                  trControl=train_control,
+                  method="svmLinear", 
+                  metric = tune_metric)
+xgb_fit <- train(form, data=titanic_train,
+                 trControl=train_control,
+                 method="xgbLinear",
+                 metric = tune_metric)
 
-model_randomf <- 
-  train(form, data=titanic_train, trControl=train_control, 
-        method="rf", metric = tune_metric)
+models_df <- tibble(model_name =  c("GLM","RF", "SVM", "XGB" ),
+                    model = list(GLM = glm_fit,
+                                 RF = rf_fit,
+                                 SVM = svml_fit,
+                                 XGB = xgb_fit))
 
-model_svm <-
-  train(form, data=titanic_train, trControl=train_control,
-        method="svmRadial", metric = tune_metric)
-
-model <- 
-  glm(form, family=binomial(link='logit'), data=titanic_train)
-
-summary(model_cv)
-model_cv
-model_randomf
-model_svm
-anova(model_cv$finalModel, test = "Chisq")
-
+models_df <-
+  models_df %>% 
+  mutate(confusion_matrix = map(model, confusionMatrix),
+         train_mean_kappa = map(model, get_kappa),
+         train_mean_accuracy = map(model, get_accuracy))
 ```
 
 We use summary and ANOVA analysis to assess the usefulness of each variable. In this case we have 5 variables that appear significant: *Pclass, Sexm, Age, SibSp and Embarked*. But using ANOVA we see that only 3 of them really contribute significantly to the result: *Pclass, Sex and Age*. The cross validated model is largely similar.
@@ -130,9 +146,7 @@ Thanks to caret we can extract similar metrics between the different models, and
 ### Model Internal Assessment
 Caret allows you to calculate a confusion matrix based on all the folds of the resampled models. This should give an indication of model performance on several re-samples, but does not tell you the performance of the **final** model on the **training** dataset
 ```{r}
-confusionMatrix(model_cv)
-confusionMatrix(model_randomf)
-confusionMatrix(model_svm)
+models_df$confusion_matrix
 
 ```
 
@@ -140,26 +154,27 @@ Both models seem to be performing very similarly, with differences likely within
 
 Caret can also allow you to generate summary tables of metrics in order to compare model fits.
 ```{r}
-results <- resamples(list(GLM = model_cv, RF = model_randomf, 
-                          SVM = model_svm))
-summary(results)
+models_df$resample_metrics <- list(resamples(models_df$model))
+  
+models_df$resample_metrics[[1]] %>% summary()
+
 ```
 
 The random forest has a seemingly more consistent set of results and a higher median in both kappa and accuracy. 
 ```{r}
-bwplot(results)
+bwplot(models_df$resample_metrics[[1]])
 
-densityplot(results)
+densityplot(models_df$resample_metrics[[1]])
 ```
 
-Interestingly the two models seem to not correlate with each other at all!
+Interestingly the models seem to not correlate with each other at all, but we only have 5 data points so...
 ````{r}
-splom(results)
+splom(models_df$resample_metrics[[1]])
 ```
 
 But at the same time we see that there is no statistically significant difference in performance of the models (lower diagonal p-value is high).
 ```{r}
-diffs <- diff(results)
+diffs <- diff(models_df$resample_metrics[[1]])
 summary(diffs)
 ```
 
