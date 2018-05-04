@@ -27,7 +27,7 @@ titanic_raw <- read_csv("../data/train.csv")
 
 
 ```{r functions}
-plot_rocr <- function(roc_pred){
+plot_rocr <- function(roc_pred, model_name){
   # ggplot-style roc plot based on the ROCR package.
   roc_perf <- performance(roc_pred, measure = "tpr", x.measure="fpr")
   roc_data <- tibble(fpr = roc_perf@x.values[[1]],
@@ -40,7 +40,8 @@ plot_rocr <- function(roc_pred){
     annotate("text", x = 0.75, y = 0.25, 
              label = 
                paste("AUC =", 
-                     performance(roc_pred, measure = "auc")@y.values[[1]]))
+                     performance(roc_pred, measure = "auc")@y.values[[1]])) +
+    labs(title = model_name)
 }
 
 get_kappa <- function(model) {
@@ -53,7 +54,18 @@ get_accuracy <- function(model) {
   mean(model$resample$Accuracy)
 }
 
+map_predict <- function(model, test_data, predict_type = "prob") {
+  # for making predictions in a functional way.
+  predict(model, 
+              newdata = test_data, 
+              type = predict_type)
+}
+
+map_predict_class <- function(model, test_data){
+  map_predict(model, test_data, "raw")
+}
 ```
+
 ### Explore
 Check for NA's
 ```{r explore}
@@ -108,27 +120,23 @@ form <- Survived ~ Pclass + Sex + Age + SibSp + Parch + Fare + Embarked +
 
 tune_metric <- "Kappa"
 
-glm_fit <- train(form, data = titanic_train,
-                 trControl=train_control,
-                 method="glm", family="binomial", 
-                 metric = tune_metric)
-rf_fit <- train(form, data=titanic_train,
-                trControl=train_control, 
-                method="rf", metric = tune_metric)
-svml_fit <- train(form, data=titanic_train,
-                  trControl=train_control,
-                  method="svmLinear", 
-                  metric = tune_metric)
-xgb_fit <- train(form, data=titanic_train,
-                 trControl=train_control,
-                 method="xgbLinear",
-                 metric = tune_metric)
-
 models_df <- tibble(model_name =  c("GLM","RF", "SVM", "XGB" ),
-                    model = list(GLM = glm_fit,
-                                 RF = rf_fit,
-                                 SVM = svml_fit,
-                                 XGB = xgb_fit))
+                    model = list(
+                      GLM = train(form, data = titanic_train,
+                                  trControl=train_control,
+                                  method="glm", family="binomial", 
+                                  metric = tune_metric),
+                      RF = train(form, data=titanic_train,
+                                 trControl=train_control, 
+                                 method="rf", metric = tune_metric),
+                      SVM = train(form, data=titanic_train,
+                                  trControl=train_control,
+                                  method="svmLinear", 
+                                  metric = tune_metric),
+                      XGB = train(form, data=titanic_train,
+                                  trControl=train_control,
+                                  method="xgbLinear",
+                                  metric = tune_metric)))
 
 models_df <-
   models_df %>% 
@@ -143,7 +151,7 @@ Next we look at the confusion matrix and other metrics of performance against th
 
 Thanks to caret we can extract similar metrics between the different models, and it appears the glm model is performing better than the rondom forest.
 
-### Model Internal Assessment
+###Model Internal Assessment
 Caret allows you to calculate a confusion matrix based on all the folds of the resampled models. This should give an indication of model performance on several re-samples, but does not tell you the performance of the **final** model on the **training** dataset
 ```{r}
 models_df$confusion_matrix
@@ -173,6 +181,7 @@ splom(models_df$resample_metrics[[1]])
 ```
 
 But at the same time we see that there is no statistically significant difference in performance of the models (lower diagonal p-value is high).
+
 ```{r}
 diffs <- diff(models_df$resample_metrics[[1]])
 summary(diffs)
@@ -182,46 +191,30 @@ summary(diffs)
 Note that the simple glm model was identical to what caret generated with cross-validation.
 ```{r confusion_matrix}
 # fix model factor levels
+models_df$model$GLM$xlevels$Title <- 
+  union(models_df$model$GLM$xlevels$Title, levels(titanic_test$Title))
+models_df$model$RF$xlevels$Title <- 
+  union(models_df$model$GLM$xlevels$Title, levels(titanic_test$Title))
+models_df$model$SVM$xlevels$Title <- 
+  union(models_df$model$GLM$xlevels$Title, levels(titanic_test$Title))
+models_df$model$XGB$xlevels$Title <- 
+  union(models_df$model$GLM$xlevels$Title, levels(titanic_test$Title))
 
-model$xlevels$Title <- union(model$xlevels$Title, levels(titanic_test$Title))
-model_cv$xlevels$Title <- union(model_cv$xlevels$Title,
-                                levels(titanic_test$Title))
-model_randomf$xlevels$Title <- union(model_randomf$xlevels$Title,
-                                     levels(titanic_test$Title))
-model_svm$xlevels$Title <- union(model_svm$xlevels$Title,
-                                 levels(titanic_test$Title))
+models_df <-
+  models_df %>% 
+  mutate(test_data = list(titanic_test),
+         observed = list(titanic_test$Survived))
 
-fitted_results <- 
-  data.frame(probability = predict(model,
-                                   newdata=titanic_test %>% select(-Name),
-                                   type='response'),
-             probability_cv = 1 - predict(model_cv,
-                                      newdata=titanic_test %>%
-                                        select(-Name),
-                                      type='prob')[[1]],
-             probability_rf = 1 - predict(model_randomf,
-                                      newdata=titanic_test %>%
-                                        select(-Name),
-                                      type='prob')[[1]],
-             probability_svm = 1-  predict(model_svm,
-                                       newdata=titanic_test %>%
-                                         select(-Name),
-                                       type='prob')[[1]],
-             class_cv = predict(model_cv, 
-                                newdata=titanic_test %>% select(-Name),
-                                type="raw"),
-             class_rf = predict(model_randomf, 
-                                newdata=titanic_test %>% select(-Name),
-                                type="raw"),
-             class_svm = predict(model_svm, 
-                                 newdata=titanic_test %>% select(-Name),
-                                 type="raw"))
 
-fitted_results$class <- ifelse(fitted_results$probability > 0.5,'X1','X0')
+models_df <- 
+  models_df %>% 
+  mutate(pred_probability = map2(model, test_data, map_predict),
+         pred_class = map2(model, test_data, map_predict_class),
+         test_confusion_matrix = map2(pred_class, observed,
+                                      confusionMatrix))
+         
 
-confusionMatrix(fitted_results$class_cv, titanic_test$Survived)
-confusionMatrix(fitted_results$class_rf, titanic_test$Survived)
-confusionMatrix(fitted_results$class_svm, titanic_test$Survived)
+models_df$test_confusion_matrix
 
 ```
 
@@ -229,17 +222,20 @@ Reasonably good accuracy can be seen that is better than the no information rate
 
 Question: Is the difference between the model performance significant?
 
+Answer: No. [See above](###Model Internal Assessment)
+
 ### ROC Analysis
-Considering a fairly balanced response class, a ROC analysis is valid. 
+Considering a fairly balanced response class, a ROC analysis is valid. Comparing the models is a bit moot since they don't seem to have different performance to each other, but we will do this for the sake of completion.
 ```{r ROC}
 
+models_df <-
+  models_df %>% 
+  mutate(pred_probability = map(pred_probability, function(x) x$X1),
+         rocr_prediction = map2(pred_probability, observed, prediction)) 
 
-plot_rocr(prediction(fitted_results$probability_cv,
-                               titanic_test$Survived))
-plot_rocr(prediction(fitted_results$probability_rf,
-                               titanic_test$Survived))
-plot_rocr(prediction(fitted_results$probability_svm,
-                               titanic_test$Survived))
+map2(models_df$rocr_prediction, models_df$model_name, plot_rocr)
 
+
+names(models_df$rocr_prediction)
 
 ```
