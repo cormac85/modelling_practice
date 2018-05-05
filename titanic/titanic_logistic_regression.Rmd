@@ -187,6 +187,22 @@ diffs <- diff(models_df$resample_metrics[[1]])
 summary(diffs)
 ```
 
+The calibration plot shows some serious issues with the SVM in the middle of the probability distribution with some mild mis-calibration for the XGB model. Difficult to say if the SVM is salvageable. The XGB model could be easily calibrated
+```{r calibration}
+models_df <-
+  models_df %>% 
+  mutate(caret_pred = map(model, function(x) x$pred)) %>% 
+  mutate(internal_calibrations = 
+           map2(rep(list(obs ~ X0), 4), caret_pred, calibration)) %>% 
+  select(-caret_pred)
+
+(models_df %>% select(internal_calibrations, model_name) %>% 
+    mutate(calibration_plots = 
+             map2(internal_calibrations, model_name,
+                  ~plot(.x, main = .y))))$calibration_plots
+
+```
+
 ### Model External Assessment
 Note that the simple glm model was identical to what caret generated with cross-validation.
 ```{r confusion_matrix}
@@ -200,12 +216,13 @@ models_df$model$SVM$xlevels$Title <-
 models_df$model$XGB$xlevels$Title <- 
   union(models_df$model$GLM$xlevels$Title, levels(titanic_test$Title))
 
+# Insert test data and test observations 
 models_df <-
   models_df %>% 
   mutate(test_data = list(titanic_test),
          observed = list(titanic_test$Survived))
 
-
+# insert predictions
 models_df <- 
   models_df %>% 
   mutate(pred_probability = map2(model, test_data, map_predict),

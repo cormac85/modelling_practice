@@ -52,7 +52,7 @@ model_df <-
 )
 
 model_df$model$XGB$results
-
+model_df$model$XGB5
 View(model_df)
 
 
