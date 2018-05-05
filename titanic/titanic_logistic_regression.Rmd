@@ -1,13 +1,15 @@
 ---
-title: "Modelling Practise"
+title: "Kaggle Titanic With List Columns & purrr"
 author: "Cormac Nolan"
 date: "24 January 2018"
 output: html_document
 editor_options: 
   chunk_output_type: console
 ---
+## Intro  {.tabset}
+This is yet another Titanic Kaggle modelling notebook, which has morphed into a demo of using list columns in data frames to simplify and organise the modelling process. It creates a huge advantage in allowing easy use of functional programming on the columns and groups in the dataframe, greatly shortening and simplifying the code. 
 
-## Setup {.tabset}
+### Setup & Functions
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE, message=FALSE, warning=TRUE, error=TRUE)
@@ -108,7 +110,7 @@ titanic_train <- titanic_clean[titanic_train_index, ]
 titanic_test <- titanic_clean[-titanic_train_index, ]
 ```
 
-### Model and Assessment
+### Model 
 Let's fit the model to the relevant variables. We use binomial since there are 2 possible outcomes.
 ```{r, cache = TRUE}
 train_control <- 
@@ -145,13 +147,9 @@ models_df <-
          train_mean_accuracy = map(model, get_accuracy))
 ```
 
-We use summary and ANOVA analysis to assess the usefulness of each variable. In this case we have 5 variables that appear significant: *Pclass, Sexm, Age, SibSp and Embarked*. But using ANOVA we see that only 3 of them really contribute significantly to the result: *Pclass, Sex and Age*. The cross validated model is largely similar.
+Thanks to `caret` we can extract similar metrics between the different models quite easily. All the models seem to be coming in around the same in regards accuracy and kappa.
 
-Next we look at the confusion matrix and other metrics of performance against the test set which we split earlier. Note that the positive class here is defined here as *Survived = X1*.
-
-Thanks to caret we can extract similar metrics between the different models, and it appears the glm model is performing better than the rondom forest.
-
-###Model Internal Assessment
+### Model Internal Assessment
 Caret allows you to calculate a confusion matrix based on all the folds of the resampled models. This should give an indication of model performance on several re-samples, but does not tell you the performance of the **final** model on the **training** dataset
 ```{r}
 models_df$confusion_matrix
@@ -239,7 +237,7 @@ Reasonably good accuracy can be seen that is better than the no information rate
 
 Question: Is the difference between the model performance significant?
 
-Answer: No. [See above](###Model Internal Assessment)
+Answer: No. [See above](### Model Internal Assessment)
 
 ### ROC Analysis
 Considering a fairly balanced response class, a ROC analysis is valid. Comparing the models is a bit moot since they don't seem to have different performance to each other, but we will do this for the sake of completion.
@@ -251,8 +249,5 @@ models_df <-
          rocr_prediction = map2(pred_probability, observed, prediction)) 
 
 map2(models_df$rocr_prediction, models_df$model_name, plot_rocr)
-
-
-names(models_df$rocr_prediction)
 
 ```
