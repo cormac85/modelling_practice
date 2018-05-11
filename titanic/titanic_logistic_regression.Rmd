@@ -137,7 +137,7 @@ titanic_test <- titanic_clean[-titanic_train_index, ]
 
 ### Model 
 Let's fit the model to the relevant variables. We use binomial since there are 2 possible outcomes.
-```{r, cache = TRUE}
+```{r, cache = FALSE}
 train_control <- 
   trainControl(method="cv", number = 10, savePredictions = TRUE, 
                classProbs = TRUE, preProcOptions = c("centre", "scale"))
@@ -147,9 +147,9 @@ form <- Survived ~ Pclass + Sex + Age + SibSp + Parch + Fare + Embarked +
 
 tune_metric <- "Kappa"
 
-algo_list <- c("glm", "rf", "svmLinear", "xgbLinear")
+algo_list <- c("glm", "rf")
 models_df <- 
-  tibble(model_name = c("GLM","RF", "SVM", "XGB" ),
+  tibble(model_name = c("GLM","RF" ),
          model_caret_name = algo_list,
          model = caretList(form, data = titanic_train, 
                            trControl = train_control,
@@ -222,7 +222,8 @@ models_df <-
   models_df %>% 
   mutate(caret_pred = map(model, function(x) x$pred)) %>% 
   mutate(internal_calibrations = 
-           map2(rep(list(obs ~ X0), 4), caret_pred, calibration)) %>% 
+           map2(rep(list(obs ~ X0), nrow(models_df)), 
+                caret_pred, calibration)) %>% 
   select(-caret_pred)
 
 (models_df %>% select(internal_calibrations, model_name) %>% 
@@ -240,10 +241,10 @@ models_df$model$glm$xlevels$Title <-
   union(models_df$model$glm$xlevels$Title, levels(titanic_test$Title))
 models_df$model$rf$xlevels$Title <- 
   union(models_df$model$glm$xlevels$Title, levels(titanic_test$Title))
-models_df$model$svmLinear$xlevels$Title <- 
-  union(models_df$model$glm$xlevels$Title, levels(titanic_test$Title))
-models_df$model$xgbLinear$xlevels$Title <- 
-  union(models_df$model$glm$xlevels$Title, levels(titanic_test$Title))
+# models_df$model$svmLinear$xlevels$Title <- 
+#   union(models_df$model$glm$xlevels$Title, levels(titanic_test$Title))
+# models_df$model$xgbLinear$xlevels$Title <- 
+#   union(models_df$model$glm$xlevels$Title, levels(titanic_test$Title))
 
 models_df <-
   models_df %>% 
@@ -273,7 +274,7 @@ models_df <-
                function(x) x$byClass[["Sensitivity"]]),
          test_specificity = 
            map_dbl(test_confusion_matrix,
-               function(x) x$byClass[["Specificity"]])) %>% View()
+               function(x) x$byClass[["Specificity"]]))
 
 models_df %>%  select(model_name, test_accuracy, test_kappa,
                       train_mean_accuracy, train_mean_kappa)
@@ -313,7 +314,7 @@ greedy_ensemble <- caretEnsemble::caretEnsemble(
   models_df$model, metric = "Accuracy",
   trControl = trainControl(
     method = "repeatedcv",
-    number = 4,
+    number = nrow(models_df),
     classProbs = TRUE,
     savePredictions = TRUE,
     repeats = 3))
@@ -364,9 +365,10 @@ models_df <-
   models_df %>% 
   mutate(test_confusion_matrix = 
            replace(test_confusion_matrix, model_name == "ENSEMBLE",
-                   list(confusionMatrix(models_df$test_pred_class[[5]],
-                                        titanic_test$Survived, 
-                                         positive = "X1"))))
+                   list(confusionMatrix(
+                     models_df$test_pred_class[[nrow(models_df)]],
+                     titanic_test$Survived, 
+                     positive = "X1"))))
 
 models_df <-
   models_df %>% 
