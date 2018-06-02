@@ -1,0 +1,248 @@
+---
+title: "Generic Analysis Template"
+author: "by [Cormac Nolan](https://github.com/cormac85/) - `r format(Sys.time(), '%d %B %Y')`"
+output: 
+  html_document:
+    code_folding: "hide"
+    css: style.css
+    includes: 
+      after_body: footer.html
+      in_header: header.html
+editor_options: 
+  chunk_output_type: console
+---
+
+# Template {.tabset .tabset-fade .tabset-pills}
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Introduction
+Blah
+```{r libraries, message = FALSE, warning = FALSE}
+library(tidyverse)
+library(stringr)
+library(igraph)
+library(tidygraph)
+library(ggraph)
+library(magrittr)
+ 
+```
+
+
+```{r functions}
+
+```
+
+
+```{r import}
+pdb <- tools::CRAN_package_db()
+
+```
+
+## Cleaning
+```{r raw exploration}
+
+```
+
+
+```{r clean 1}
+aut <- 
+  pdb$Author %>%
+  str_replace_all("\\(([^)]+)\\)", "") %>%
+  str_replace_all("\\[([^]]+)\\]", "") %>%
+  str_replace_all("<([^>]+)>", "") %>%
+  str_replace_all("\n", " ") %>%
+  str_replace_all("[Cc]ontribution.* from|[Cc]ontribution.* by|[Cc]ontributors", " ") %>%
+  str_replace_all("\\(|\\)|\\[|\\]", " ") %>%
+  iconv(to = "ASCII//TRANSLIT") %>%
+  str_replace_all("'$|^'", "") %>%
+  gsub("([A-Z])([A-Z]{1,})", "\\1\\L\\2", ., perl = TRUE) %>%
+  gsub("\\b([A-Z]{1}) \\b", "\\1\\. ", .) %>%
+  map(str_split, ",|;|&| \\. |--|(?<=[a-z])\\.| [Aa]nd | [Ww]ith | [Bb]y ", simplify = TRUE) %>%
+  map(str_replace_all, "[[:space:]]+", " ") %>%
+  map(str_replace_all, " $|^ | \\.", "") %>%
+  map(function(x) x[str_length(x) != 0]) %>%
+  set_names(pdb$Package) %>%
+  extract(map_lgl(., function(x) length(x) > 1))
+
+packages_df <- 
+  tibble(package_name = (aut %>%  names()),
+         authors = aut) %>% 
+  unnest()
+
+aut_df <- 
+  aut %>%
+  unlist() %>%
+  dplyr::as_data_frame() %>%
+  count(value) %>% 
+  rename(Name = value, Package = n) 
+```
+
+
+```{r clean 2}
+
+edge_list <- 
+  aut %>%
+  map(combn, m = 2) %>%
+  do.call("cbind", .) %>%
+  t() %>%
+  dplyr::as_data_frame() %>%
+  arrange(V1, V2) %>%
+  count(V1, V2)
+
+author_graph <- 
+  edge_list %>%
+  select(V1, V2) %>%
+  as.matrix() %>%
+  graph.edgelist(directed = FALSE) %>% 
+  as_tbl_graph() %>%
+  activate("edges") %>%
+  mutate(Weight = edge_list$n) %>%
+  activate("nodes") %>%
+  rename(Name = name) %>% 
+  mutate(Component = group_components()) %>%
+  filter(Component == names(table(Component))[which.max(table(Component))])
+
+```
+
+## Exploration
+```{r exploration 1}
+author_graph %>%
+  mutate(Page_rank = centrality_pagerank()) %>% 
+  top_n(10, Page_rank) %>% 
+  as_tibble() %>% 
+  ggplot() +
+    geom_col(aes(forcats::fct_reorder(Name, Page_rank), Page_rank)) +
+    coord_flip() + theme_minimal() +
+    labs(title = "Top 10 contributors based on Page Rank", x = "")
+```
+
+
+```{r exploration 2}
+important_author_graph <- 
+  author_graph %>% 
+  left_join(aut_df) %>% 
+  filter(Package > 4) %>% 
+  mutate(Component = group_components()) %>%
+  filter(Component == names(table(Component))[which.max(table(Component))])
+```
+
+
+```{r exploration 3}
+ggraph(important_author_graph, layout = 'lgl') +
+  geom_edge_fan(alpha = 0.1) +
+  theme_graph()
+```
+
+
+```{r summary}
+important_author_graph <- 
+  mutate(important_author_graph, Community = group_edge_betweenness(),
+         Degree = centrality_degree())
+
+important_author_graph %>% 
+  filter(Community == names(sort(table(Community), decr = TRUE))[1]) %>%
+  select(Name, Package) %>%
+  arrange(desc(Package)) %>%
+  top_n(10, Package) %>%
+  as_tibble() %>% 
+  knitr::kable(format = "html", caption = "Cluster 1")
+
+important_author_graph %>% 
+  filter(Community == names(sort(table(Community), decr = TRUE))[2]) %>%
+  select(Name, Package) %>%
+  arrange(desc(Package)) %>%
+  top_n(10, Package) %>%
+  as_tibble() %>% 
+  knitr::kable(format = "html", caption = "Cluster 1")
+
+important_author_graph %>% 
+  filter(Community == names(sort(table(Community), decr = TRUE))[3]) %>%
+  select(Name, Package) %>%
+  arrange(desc(Package)) %>%
+  top_n(10, Package) %>%
+  as_tibble() %>% 
+  knitr::kable(format = "html", caption = "Cluster 3")
+```
+
+## Visualise Largest Communities
+```{r}
+
+labelled_important_author_graph <-
+  important_author_graph %>% 
+  mutate(Community = 
+           case_when(Community == names(sort(table(Community),
+                                             decr = TRUE))[1] ~ "The Ancients",
+                     Community == names(sort(table(Community),
+                                             decr = TRUE))[2] ~ "The Moderns",
+                     Community == names(sort(table(Community),
+                                             decr = TRUE))[3] ~ "The Contenders",
+                     Community == names(sort(table(Community),
+                                             decr = TRUE))[4] ~ "Community 4",
+                     Community == names(sort(table(Community),
+                                             decr = TRUE))[5] ~ "Community 5",
+                     Community == names(sort(table(Community),
+                                             decr = TRUE))[6] ~ "Community 6",                  
+                     Community == names(sort(table(Community),
+                                             decr = TRUE))[7] ~ "Community 7",
+                     Community %in% names(sort(table(Community),
+                                               decr = TRUE))[-1:-7] ~ "Unclassified")) %>% 
+  mutate(Community = factor(Community)) %>% 
+  filter(Degree > 5) %>% 
+  mutate(Degree = centrality_degree())
+ 
+
+ 
+ggraph(labelled_important_author_graph, layout = 'lgl') +
+  geom_edge_fan(alpha = 0.1) +
+  geom_node_point(aes(color = Community, size = Package)) +
+  theme_graph()
+
+
+```
+
+
+```{r}
+labelled_important_author_graph %>%
+  activate("edges") %>% 
+  mutate(Community_from = .N()$Community[from],
+         Community_to = .N()$Community[to]) %>% 
+  filter((Community_from == "The Ancients" & Community_to == "The Moderns")|
+           Community_from == "The Moderns" & Community_to == "The Ancients") %>% 
+  as_tibble() %>% 
+  nrow()
+```
+
+
+```{r}
+labelled_important_author_graph %>% 
+  activate("nodes") %>% 
+  as.tibble() %>% 
+  group_by(Community) %>% 
+  tally() %>% 
+  arrange(desc(n))
+
+community_6_names <- 
+  (labelled_important_author_graph %>% 
+  activate("nodes") %>% 
+  as.tibble() %>% 
+  filter(Community == "Community 6"))$Name
+
+packages_df %>% 
+  filter(authors %in% community_6_names) %>%
+  group_by(package_name) %>% 
+  tally() %>% arrange(desc(n))
+```
+
+
+```{r}
+community_names <-
+  labelled_important_author_graph %>% 
+  activate("nodes") %>% 
+  as.tibble() %>% 
+  select(Name, Community) %>% 
+  group_by(Community)
+ 
+
+```
