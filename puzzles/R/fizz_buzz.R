@@ -5,7 +5,7 @@ fizz_buzz <- function(n, triggers = data.frame(numbers = c(3,5), names = c("fizz
   # and for the multiples of five print "Buzz".
   # For numbers which are multiples of both three and five print "FizzBuzz".
 
-  # If you REALLy want to make this completely generlised, allow the check function
+  # TODO If you REALLy want to make this completely generlised, allow the check function
   # (in the normal case this is the divisible_by function) to be paramaterised.
 
   divisible_by <- function(n1, n2) {
