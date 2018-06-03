@@ -11,18 +11,12 @@ fizz_buzz <- function(n, triggers = data.frame(numbers = c(3,5), names = c("fizz
 
   triggers$names <- as.character(triggers$names)
 
-  fizz <- divisible_by(n, triggers$numbers[1])
-  buzz <- divisible_by(n, triggers$numbers[2])
-  fizz_word <- triggers$names[1]
-  buzz_word <- triggers$names[2]
+  trigger_checks <- purrr::map2_lgl(n, triggers$numbers, divisible_by)
 
-  if(fizz & buzz)
-    paste0(fizz_word, buzz_word)
-  else if(buzz)
-    buzz_word
-  else if (fizz)
-    fizz_word
-  else
-    n
+  trigger_result <- paste0(triggers$names[trigger_checks], collapse = "")
+  if (trigger_result == "")
+    trigger_result <- n
+
+  return(trigger_result)
 }
 
