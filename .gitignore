@@ -1,6 +1,7 @@
 .Rproj.user
 .Rhistory
 .RData
+*.RData
 .Ruserdata
 diabetes_cache/
 diabetes_files/

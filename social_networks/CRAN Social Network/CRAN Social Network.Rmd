@@ -167,6 +167,7 @@ important_author_graph %>%
 ```
 
 ## Visualise Largest Communities
+Creating names for the largest communities based on the previous calculation.
 ```{r}
 
 labelled_important_author_graph <-
@@ -199,10 +200,9 @@ ggraph(labelled_important_author_graph, layout = 'lgl') +
   geom_node_point(aes(color = Community, size = Package)) +
   theme_graph()
 
-
 ```
 
-
+Number of connections between "Moderns" and "Ancients" authors.
 ```{r}
 labelled_important_author_graph %>%
   activate("edges") %>% 
@@ -214,7 +214,7 @@ labelled_important_author_graph %>%
   nrow()
 ```
 
-
+Number of authors in each community. Specifically wanting to find a way to look up the packages that these authors frequent in.
 ```{r}
 labelled_important_author_graph %>% 
   activate("nodes") %>% 
@@ -244,5 +244,24 @@ community_names <-
   select(Name, Community) %>% 
   group_by(Community)
  
+packages_df %<>% 
+  left_join(community_names, by = c("authors" = "Name")) %>%
+  na.omit()
 
+packages_df %>% 
+  select(package_name, Community) %>% 
+  group_by(package_name, Community ) %>% 
+  tally() %>% 
+  arrange(desc(n)) %>% 
+  ungroup() %>% 
+  top_n(10) %>% 
+  knitr::kable(caption = "Count of Authors by Packages and Community")
+  
+packages_df %>% 
+  group_by(authors, Community) %>% 
+  tally() %>% 
+  arrange(desc(n)) %>% 
+  ungroup() %>% 
+  top_n(10) %>% 
+  knitr::kable(caption = "Count of Packages by Author and Community")
 ```
