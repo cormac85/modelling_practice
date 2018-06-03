@@ -263,5 +263,5 @@ packages_df %>%
   arrange(desc(n)) %>% 
   ungroup() %>% 
   top_n(10) %>% 
-  knitr::kable(caption = "Count of Packages by Author and Community")
+  knitr::kable(caption = "Count of Packages by Packages and Community")
 ```
