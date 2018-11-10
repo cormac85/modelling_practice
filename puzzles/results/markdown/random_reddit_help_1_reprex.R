@@ -1,3 +1,14 @@
+#' ---
+#' output:
+#'   md_document:
+#'     variant: markdown_github
+#' ---
+#+ reprex-setup, include = FALSE
+knitr::opts_chunk$set(collapse = TRUE, comment = "#>", error = TRUE)
+knitr::opts_knit$set(upload.fun = knitr::imgur_upload)
+
+
+#+ reprex-body
 # https://www.reddit.com/r/rstats/comments/9vnmy5/apply_operations_to_every_observation_in_a_group/
 library(dplyr)
 
@@ -18,4 +29,6 @@ df1 %>%
     TRUE ~ gender1Wage)) %>%
   group_by(ED, YEAR) %>%
   mutate(meanWage = mean(gender1Wage))
+
+
 
